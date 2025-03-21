@@ -4,6 +4,7 @@ import torch
 import torchaudio
 import base64
 import os
+import re
 from dataclasses import dataclass
 from typing import List, Optional
 from generator import load_csm_1b
@@ -16,7 +17,6 @@ class Segment:
     audio: Optional[torch.Tensor] = None
 
 
-
 def load_prompt_audio(audio_path: str, target_sample_rate: int) -> torch.Tensor:
     audio_tensor, sample_rate = torchaudio.load(audio_path)
     audio_tensor = audio_tensor.squeeze(0)
@@ -26,9 +26,11 @@ def load_prompt_audio(audio_path: str, target_sample_rate: int) -> torch.Tensor:
     )
     return audio_tensor
 
+
 def prepare_prompt(text: str, speaker: int, audio_path: str, sample_rate: int) -> Segment:
     audio_tensor = load_prompt_audio(audio_path, sample_rate)
     return Segment(text=text, speaker=speaker, audio=audio_tensor)
+
 
 # Function to call LLM
 def call_llm(prompt, model="llama3:8b", chat_history=[]):
@@ -45,6 +47,7 @@ def call_llm(prompt, model="llama3:8b", chat_history=[]):
     except Exception as e:
         return f"Error: {e}"
 
+
 # Function to get available models
 def get_available_models():
     try:
@@ -53,8 +56,78 @@ def get_available_models():
     except Exception as e:
         return [f"Error fetching models: {e}"]
 
+
+# Function to split text into reasonable chunks for TTS
+def split_text_into_chunks(text, max_chunk_length=200):
+    # Split by sentences or natural pauses for better TTS results
+    # Try to break at periods, then commas, then spaces
+    chunks = []
+    
+    # First split by sentences (periods, question marks, exclamation points)
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    
+    current_chunk = ""
+    for sentence in sentences:
+        # If adding this sentence would exceed max length, store current chunk and start new one
+        if len(current_chunk) + len(sentence) > max_chunk_length and current_chunk:
+            chunks.append(current_chunk.strip())
+            current_chunk = sentence
+        else:
+            if current_chunk:
+                current_chunk += " " + sentence
+            else:
+                current_chunk = sentence
+    
+    # Add the last chunk if there's anything left
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+    
+    # If any chunk is still too long, split it by commas
+    final_chunks = []
+    for chunk in chunks:
+        if len(chunk) > max_chunk_length:
+            comma_parts = chunk.split(", ")
+            sub_chunk = ""
+            for part in comma_parts:
+                if len(sub_chunk) + len(part) > max_chunk_length and sub_chunk:
+                    final_chunks.append(sub_chunk.strip())
+                    sub_chunk = part
+                else:
+                    if sub_chunk:
+                        sub_chunk += ", " + part
+                    else:
+                        sub_chunk = part
+            if sub_chunk:
+                final_chunks.append(sub_chunk.strip())
+        else:
+            final_chunks.append(chunk)
+    
+    # If any chunk is still too long, just hard split it
+    result_chunks = []
+    for chunk in final_chunks:
+        if len(chunk) > max_chunk_length:
+            # Hard split by words
+            words = chunk.split()
+            sub_chunk = ""
+            for word in words:
+                if len(sub_chunk) + len(word) > max_chunk_length and sub_chunk:
+                    result_chunks.append(sub_chunk.strip())
+                    sub_chunk = word
+                else:
+                    if sub_chunk:
+                        sub_chunk += " " + word
+                    else:
+                        sub_chunk = word
+            if sub_chunk:
+                result_chunks.append(sub_chunk.strip())
+        else:
+            result_chunks.append(chunk)
+    
+    return result_chunks
+
+
 # Function to generate audio from text
-def generate_audio(text, speaker_id=1):
+def generate_audio(text, speaker_id=1, max_chunk_length=200):
     # Initialize generator if not already in session state
     if 'tts_generator' not in st.session_state:
         st.session_state.tts_generator = load_csm_1b()
@@ -70,24 +143,68 @@ def generate_audio(text, speaker_id=1):
     prompt_b = prepare_prompt(context2, 1, "audio2.wav", generator.sample_rate)
     prompt_segments = [prompt_a, prompt_b]
     
-    # Generate audio for the text
-    audio_tensor = generator.generate(
-        text=text,
-        speaker=speaker_id,
-        context=prompt_segments,
-        max_audio_length_ms=25_000
-    )
+    # Check if text is too long and needs to be split
+    text_chunks = split_text_into_chunks(text, max_chunk_length)
     
-    # Save audio to file in a temp directory
-    os.makedirs("temp_audio", exist_ok=True)
-    audio_file_path = f"temp_audio/response_{hash(text)}.wav"
-    torchaudio.save(
-        audio_file_path,
-        audio_tensor.unsqueeze(0).cpu(),
-        generator.sample_rate
-    )
-    
-    return audio_file_path
+    if len(text_chunks) == 1:
+        # If we only have one chunk, generate normally
+        audio_tensor = generator.generate(
+            text=text,
+            speaker=speaker_id,
+            context=prompt_segments,
+            max_audio_length_ms=25_000
+        )
+        
+        # Save audio to file in a temp directory
+        os.makedirs("temp_audio", exist_ok=True)
+        audio_file_path = f"temp_audio/response_{hash(text)}.wav"
+        torchaudio.save(
+            audio_file_path,
+            audio_tensor.unsqueeze(0).cpu(),
+            generator.sample_rate
+        )
+        
+        return audio_file_path
+    else:
+        # Process each chunk and concatenate the results
+        audio_tensors = []
+        
+        # Show progress bar when processing multiple chunks
+        progress_text = f"Generating audio for {len(text_chunks)} segments..."
+        progress_bar = st.progress(0)
+        
+        for i, chunk in enumerate(text_chunks):
+            # Update progress
+            progress_bar.progress((i / len(text_chunks)))
+            st.text(f"Processing chunk {i+1}/{len(text_chunks)}: {chunk[:30]}...")
+            
+            # Generate audio for this chunk
+            chunk_audio = generator.generate(
+                text=chunk,
+                speaker=speaker_id,
+                context=prompt_segments,
+                max_audio_length_ms=25_000
+            )
+            audio_tensors.append(chunk_audio)
+        
+        # Complete the progress
+        progress_bar.progress(1.0)
+        st.text("Merging audio segments...")
+        
+        # Concatenate all audio tensors
+        full_audio = torch.cat(audio_tensors, dim=0)
+        
+        # Save the complete audio file
+        os.makedirs("temp_audio", exist_ok=True)
+        audio_file_path = f"temp_audio/response_{hash(text)}.wav"
+        torchaudio.save(
+            audio_file_path,
+            full_audio.unsqueeze(0).cpu(),
+            generator.sample_rate
+        )
+        
+        return audio_file_path
+
 
 # Function to get base64 encoded audio for HTML audio player
 def get_audio_base64(audio_file):
@@ -95,6 +212,7 @@ def get_audio_base64(audio_file):
         audio_bytes = f.read()
     audio_b64 = base64.b64encode(audio_bytes).decode()
     return audio_b64
+
 
 # Function to create an HTML audio player
 def get_audio_player_html(audio_b64):
@@ -106,13 +224,19 @@ def get_audio_player_html(audio_b64):
     """
     return audio_html
 
+
 def main():
     st.set_page_config(page_title="LLM Chatbot using Ollama", layout="centered")
     st.title("🤖 Chatbot using Ollama LLaMA")
     
     st.sidebar.title("Settings")
-    models = ["llama3.2:1b", "llama3:8b","gemma3:1b" ]
+    models = ["llama3.2:1b", "llama3:8b", "gemma3:1b"]
     model = st.sidebar.selectbox("Choose LLaMA Model", models)
+    
+    # TTS settings in sidebar
+    st.sidebar.subheader("Text-to-Speech Settings")
+    max_chunk_length = st.sidebar.slider("Max Chunk Length", 100, 500, 200, 
+                                     help="Maximum number of characters per audio chunk. Longer texts will be split into chunks of this size.")
     
     # Initialize session state
     if "chat_history" not in st.session_state:
@@ -148,7 +272,7 @@ def main():
                 if st.button("🔊", key=f"speak_{i}"):
                     if i not in st.session_state.audio_files:
                         with st.spinner("Generating audio..."):
-                            audio_file = generate_audio(content)
+                            audio_file = generate_audio(content, speaker_id=1, max_chunk_length=max_chunk_length)
                             st.session_state.audio_files[i] = audio_file
                     
                     # Display audio player
@@ -173,7 +297,7 @@ def main():
         
         # Generate audio for the response
         with st.spinner("Generating audio..."):
-            audio_file = generate_audio(response)
+            audio_file = generate_audio(response, speaker_id=1, max_chunk_length=max_chunk_length)
             st.session_state.audio_files[message_idx] = audio_file
         
         # Display audio player
@@ -185,6 +309,7 @@ def main():
         
         # Force rerun to update UI
         st.rerun()
+
 
 if __name__ == "__main__":
     main()
