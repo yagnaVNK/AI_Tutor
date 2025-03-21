@@ -3,7 +3,7 @@ import ollama
 
 def call_llm(prompt, model="llama3:8b", chat_history=[]):
     try:
-        system_prompt = "You are a funny helpful ai assistant who gives the answers in a short and conversational way."
+        system_prompt = "You are a funny helpful ai assistant who gives the answers in a short and conversational way. DO not add any punctuation like : or ; in the output text"
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend([{"role": role, "content": content} for role, content in chat_history])
         messages.append({"role": "user", "content": prompt})
