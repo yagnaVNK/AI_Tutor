@@ -39,7 +39,14 @@ def main():
         if role == "user":
             st.chat_message("user").markdown(content)
         else:
-            st.chat_message("assistant").markdown(content)
+            col1, col2 = st.columns([0.9, 0.1])
+            
+            with col1:
+                st.chat_message("assistant").markdown(content)
+            with col2:
+                 if st.button("📋", key=f"copy_{len(st.session_state.chat_history)}"):
+                    st.session_state.clipboard_text = content
+                    st.success("Copied to clipboard!")
 
     prompt = st.chat_input("Ask something...")
 

@@ -162,14 +162,7 @@ class Generator:
 
 
 def load_csm_1b(device: str = "cuda") -> Generator:
-    config =ModelArgs(
-        backbone_flavor="llama-1B",
-        decoder_flavor="llama-100M",
-        text_vocab_size=128256,
-        audio_vocab_size=2051,
-        audio_num_codebooks=32,
-    )
-    model = Model.from_pretrained("csm/ckpt.pt",config=config)
+    model = Model.from_pretrained("sesame/csm-1b")
     model.to(device=device, dtype=torch.bfloat16)
 
     generator = Generator(model)
