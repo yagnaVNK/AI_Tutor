@@ -1,0 +1,17 @@
+version: '3'
+
+services:
+  streamlit-app:
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./:/app
+      - ollama-models:/root/.ollama
+    environment:
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+    restart: unless-stopped
+
+volumes:
+  ollama-models:
