@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from typing import List, Optional
 from generator import load_csm_1b
 
+
+
 # Define the Segment class for TTS
 @dataclass
 class Segment:
@@ -226,11 +228,11 @@ def get_audio_player_html(audio_b64):
 
 
 def main():
-    st.set_page_config(page_title="LLM Chatbot using Ollama", layout="centered")
-    st.title("🤖 Chatbot using Ollama LLaMA")
+    #st.set_page_config(page_title="LLM Chatbot using Ollama", layout="centered")
+    st.title("🤖 Chatbot using Ollama")
     
     st.sidebar.title("Settings")
-    models = ["llama3.2:1b", "llama3:8b", "gemma3:1b"]
+    models = ["llama3.2:1b", "llama3:8b", "gemma"]
     model = st.sidebar.selectbox("Choose LLaMA Model", models)
     
     # TTS settings in sidebar
