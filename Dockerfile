@@ -59,6 +59,7 @@ sleep 5 \n\
 ollama pull llama3.2:1b \n\
 ollama pull llama3:8b \n\
 ollama pull gemma \n\
+streamlit run app.py --server.port=8501 --server.address=0.0.0.0 \n\
 ' > /app/start.sh && chmod +x /app/start.sh
 
 # Expose the port Streamlit runs on
@@ -66,5 +67,3 @@ EXPOSE 8501
 
 # Command to run the application
 CMD ["/app/start.sh"]
-
-ENTRYPOINT ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]

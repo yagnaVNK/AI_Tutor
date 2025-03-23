@@ -18,6 +18,18 @@ ollama pull llama3:8b
 echo "Pulling gemma model..."
 ollama pull gemma
 
+# Login to Hugging Face
+echo "Logging in to Hugging Face..."
+if [ -n "$HUGGING_FACE_HUB_TOKEN" ]; then
+    # Pass the token and automatically answer 'n' to the prompt
+    echo -e "$HUGGING_FACE_HUB_TOKEN\nn" | huggingface-cli login
+else
+    echo "HUGGING_FACE_HUB_TOKEN environment variable not set. Skipping login."
+fi
+
+# Wait a moment for the login to complete
+sleep 2
+
 # Start the Streamlit application
 echo "Starting Streamlit application..."
-streamlit run app.py --server.port=8501 
+streamlit run app.py --server.port=8501 --server.address=0.0.0.0
