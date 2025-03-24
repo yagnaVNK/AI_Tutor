@@ -1,317 +1,306 @@
-import streamlit as st
-import ollama
-import torch
-import torchaudio
-import base64
 import os
-import re
-from dataclasses import dataclass
-from typing import List, Optional
-from generator import load_csm_1b
+import streamlit as st
+import streamlit.components.v1 as components
+import uuid
 
-
-
-# Define the Segment class for TTS
-@dataclass
-class Segment:
-    text: str
-    speaker: int
-    audio: Optional[torch.Tensor] = None
-
-
-def load_prompt_audio(audio_path: str, target_sample_rate: int) -> torch.Tensor:
-    audio_tensor, sample_rate = torchaudio.load(audio_path)
-    audio_tensor = audio_tensor.squeeze(0)
-    # Resample is lazy so we can always call it
-    audio_tensor = torchaudio.functional.resample(
-        audio_tensor, orig_freq=sample_rate, new_freq=target_sample_rate
-    )
-    return audio_tensor
-
-
-def prepare_prompt(text: str, speaker: int, audio_path: str, sample_rate: int) -> Segment:
-    audio_tensor = load_prompt_audio(audio_path, sample_rate)
-    return Segment(text=text, speaker=speaker, audio=audio_tensor)
-
-
-# Function to call LLM
-def call_llm(prompt, model="llama3:8b", chat_history=[]):
-    try:
-        system_prompt = "You are a funny helpful ai assistant who gives the answers in a short and conversational way. DO not add any punctuation like : or ; in the output text"
-        messages = [{"role": "system", "content": system_prompt}]
-        messages.extend([{"role": role, "content": content} for role, content in chat_history])
-        messages.append({"role": "user", "content": prompt})
-        response = ollama.chat(
-            model=model,
-            messages=messages
-        )
-        return response["message"]["content"]
-    except Exception as e:
-        return f"Error: {e}"
-
-
-# Function to get available models
-def get_available_models():
-    try:
-        models = ollama.list_models()
-        return [model['name'] for model in models]
-    except Exception as e:
-        return [f"Error fetching models: {e}"]
-
-
-# Function to split text into reasonable chunks for TTS
-def split_text_into_chunks(text, max_chunk_length=200):
-    # Split by sentences or natural pauses for better TTS results
-    # Try to break at periods, then commas, then spaces
-    chunks = []
-    
-    # First split by sentences (periods, question marks, exclamation points)
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    
-    current_chunk = ""
-    for sentence in sentences:
-        # If adding this sentence would exceed max length, store current chunk and start new one
-        if len(current_chunk) + len(sentence) > max_chunk_length and current_chunk:
-            chunks.append(current_chunk.strip())
-            current_chunk = sentence
-        else:
-            if current_chunk:
-                current_chunk += " " + sentence
-            else:
-                current_chunk = sentence
-    
-    # Add the last chunk if there's anything left
-    if current_chunk:
-        chunks.append(current_chunk.strip())
-    
-    # If any chunk is still too long, split it by commas
-    final_chunks = []
-    for chunk in chunks:
-        if len(chunk) > max_chunk_length:
-            comma_parts = chunk.split(", ")
-            sub_chunk = ""
-            for part in comma_parts:
-                if len(sub_chunk) + len(part) > max_chunk_length and sub_chunk:
-                    final_chunks.append(sub_chunk.strip())
-                    sub_chunk = part
-                else:
-                    if sub_chunk:
-                        sub_chunk += ", " + part
-                    else:
-                        sub_chunk = part
-            if sub_chunk:
-                final_chunks.append(sub_chunk.strip())
-        else:
-            final_chunks.append(chunk)
-    
-    # If any chunk is still too long, just hard split it
-    result_chunks = []
-    for chunk in final_chunks:
-        if len(chunk) > max_chunk_length:
-            # Hard split by words
-            words = chunk.split()
-            sub_chunk = ""
-            for word in words:
-                if len(sub_chunk) + len(word) > max_chunk_length and sub_chunk:
-                    result_chunks.append(sub_chunk.strip())
-                    sub_chunk = word
-                else:
-                    if sub_chunk:
-                        sub_chunk += " " + word
-                    else:
-                        sub_chunk = word
-            if sub_chunk:
-                result_chunks.append(sub_chunk.strip())
-        else:
-            result_chunks.append(chunk)
-    
-    return result_chunks
-
-
-# Function to generate audio from text
-def generate_audio(text, speaker_id=1, max_chunk_length=200):
-    # Initialize generator if not already in session state
-    if 'tts_generator' not in st.session_state:
-        st.session_state.tts_generator = load_csm_1b()
-    
-    generator = st.session_state.tts_generator
-    
-    # Create context for generation
-    context1 = """Think of it like this imagine you're trying to describe a bunch of different objects to someone who's never seen them before you've got to use words that are unique to each object so they can understand what you mean. In computer vision we do something similar with images these are called feature vectors or descriptors because they help computers match an image to the ones it's seen many times before"""
-    context2 = """The codebook is like a list of these feature vectors it's used to build the embeddings which are basically vector representations of each image in the codebook, Embeddings are how we map objects to a high dimensional space where objects that are similar are close together and objects that are different are far apart think of it like a big graph with images as nodes and edges between nodes, when you look at the same object multiple times they'll form a connection to each other."""
-    
-    # Prepare prompt segments
-    prompt_a = prepare_prompt(context1, 1, "audio1.wav", generator.sample_rate)
-    prompt_b = prepare_prompt(context2, 1, "audio2.wav", generator.sample_rate)
-    prompt_segments = [prompt_a, prompt_b]
-    
-    # Check if text is too long and needs to be split
-    text_chunks = split_text_into_chunks(text, max_chunk_length)
-    
-    if len(text_chunks) == 1:
-        # If we only have one chunk, generate normally
-        audio_tensor = generator.generate(
-            text=text,
-            speaker=speaker_id,
-            context=prompt_segments,
-            max_audio_length_ms=25_000
-        )
-        
-        # Save audio to file in a temp directory
-        os.makedirs("temp_audio", exist_ok=True)
-        audio_file_path = f"temp_audio/response_{hash(text)}.wav"
-        torchaudio.save(
-            audio_file_path,
-            audio_tensor.unsqueeze(0).cpu(),
-            generator.sample_rate
-        )
-        
-        return audio_file_path
-    else:
-        # Process each chunk and concatenate the results
-        audio_tensors = []
-        
-        # Show progress bar when processing multiple chunks
-        progress_text = f"Generating audio for {len(text_chunks)} segments..."
-        progress_bar = st.progress(0)
-        
-        for i, chunk in enumerate(text_chunks):
-            # Update progress
-            progress_bar.progress((i / len(text_chunks)))
-            st.text(f"Processing chunk {i+1}/{len(text_chunks)}: {chunk[:30]}...")
-            
-            # Generate audio for this chunk
-            chunk_audio = generator.generate(
-                text=chunk,
-                speaker=speaker_id,
-                context=prompt_segments,
-                max_audio_length_ms=25_000
-            )
-            audio_tensors.append(chunk_audio)
-        
-        # Complete the progress
-        progress_bar.progress(1.0)
-        st.text("Merging audio segments...")
-        
-        # Concatenate all audio tensors
-        full_audio = torch.cat(audio_tensors, dim=0)
-        
-        # Save the complete audio file
-        os.makedirs("temp_audio", exist_ok=True)
-        audio_file_path = f"temp_audio/response_{hash(text)}.wav"
-        torchaudio.save(
-            audio_file_path,
-            full_audio.unsqueeze(0).cpu(),
-            generator.sample_rate
-        )
-        
-        return audio_file_path
-
-
-# Function to get base64 encoded audio for HTML audio player
-def get_audio_base64(audio_file):
-    with open(audio_file, "rb") as f:
-        audio_bytes = f.read()
-    audio_b64 = base64.b64encode(audio_bytes).decode()
-    return audio_b64
-
-
-# Function to create an HTML audio player
-def get_audio_player_html(audio_b64):
-    audio_html = f"""
-    <audio controls style="height:50px; width:100%">
-        <source src="data:audio/wav;base64,{audio_b64}" type="audio/wav">
-        Your browser does not support the audio element.
-    </audio>
+def mic_recorder(save_path="recordings"):
     """
-    return audio_html
+    Creates a microphone recorder component for Streamlit with device selection.
+    
+    Args:
+        save_path (str, optional): Directory to save recordings. Defaults to "recordings".
+    
+    Returns:
+        str or None: Path to the saved audio file if recording is complete, None otherwise
+    """
+    # Create save directory if it doesn't exist
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+    
+    # Generate a unique ID for this instance
+    component_id = str(uuid.uuid4())
+    
+    # Define the HTML/JS component for microphone recording
+    mic_html = f"""
+    <div id="mic-recorder-{component_id}">
+        <style>
+            .mic-button {{
+                background-color: #4CAF50;
+                border: none;
+                color: white;
+                padding: 15px 32px;
+                text-align: center;
+                text-decoration: none;
+                display: inline-block;
+                font-size: 16px;
+                margin: 4px 2px;
+                cursor: pointer;
+                border-radius: 8px;
+                transition: background-color 0.3s;
+            }}
+            .mic-button.recording {{
+                background-color: #f44336;
+            }}
+            .timer {{
+                font-size: 18px;
+                margin-top: 10px;
+            }}
+            .audio-container {{
+                margin-top: 20px;
+            }}
+            #device-selector-{component_id} {{
+                margin: 10px 0;
+                padding: 8px;
+                width: 100%;
+                border-radius: 4px;
+                border: 1px solid #ccc;
+            }}
+            .device-label {{
+                margin-bottom: 5px;
+                font-weight: bold;
+            }}
+            .control-panel {{
+                margin-bottom: 15px;
+                padding: 15px;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                background-color: #f9f9f9;
+            }}
+        </style>
 
-
-def main():
-    #st.set_page_config(page_title="LLM Chatbot using Ollama", layout="centered")
-    st.title("🤖 Chatbot using Ollama")
-    
-    st.sidebar.title("Settings")
-    models = ["llama3.2:1b", "llama3:8b", "gemma"]
-    model = st.sidebar.selectbox("Choose LLaMA Model", models)
-    
-    # TTS settings in sidebar
-    st.sidebar.subheader("Text-to-Speech Settings")
-    max_chunk_length = st.sidebar.slider("Max Chunk Length", 100, 500, 200, 
-                                     help="Maximum number of characters per audio chunk. Longer texts will be split into chunks of this size.")
-    
-    # Initialize session state
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
-    if "audio_files" not in st.session_state:
-        st.session_state.audio_files = {}
-    
-    # Display chat history
-    for i, chat in enumerate(st.session_state.chat_history):
-        role, content = chat
-        if role == "user":
-            st.chat_message("user").markdown(content)
-        else:
-            # For assistant messages, display message with audio button
-            col1, col2 = st.columns([0.9, 0.1])
-            with col1:
-                message_container = st.chat_message("assistant")
-                message_container.markdown(content)
-                
-                # Check if audio exists for this message
-                if i in st.session_state.audio_files:
-                    audio_file = st.session_state.audio_files[i]
-                    audio_b64 = get_audio_base64(audio_file)
-                    message_container.markdown(get_audio_player_html(audio_b64), unsafe_allow_html=True)
+        <div class="control-panel">
+            <div class="device-label">Select Microphone:</div>
+            <select id="device-selector-{component_id}" class="form-control">
+                <option value="">Loading devices...</option>
+            </select>
             
-            with col2:
-                # Copy button
-                if st.button("📋", key=f"copy_{i}"):
-                    st.session_state.clipboard_text = content
-                    st.success("Copied to clipboard!")
+            <div style="margin-top: 15px;">
+                <button id="micButton-{component_id}" class="mic-button">Start Recording</button>
+                <button id="refreshDevices-{component_id}" style="margin-left: 10px; padding: 15px 20px; background-color: #2196F3; color: white; border: none; border-radius: 8px; cursor: pointer;">Refresh Devices</button>
+            </div>
+        </div>
+        
+        <div id="timer-{component_id}" class="timer">00:00</div>
+        <div id="status-{component_id}"></div>
+        <div id="audio-container-{component_id}" class="audio-container"></div>
+        <a id="download-link-{component_id}" style="display:none"></a>
+
+        <script>
+            (function() {{
+                // Define variables for recording
+                let mediaRecorder;
+                let audioChunks = [];
+                let isRecording = false;
+                let stream;
+                let startTime;
+                let timerInterval;
+                let audioBlob;
+                let audioUrl;
                 
-                # Speaker button - generate audio if not already generated
-                if st.button("🔊", key=f"speak_{i}"):
-                    if i not in st.session_state.audio_files:
-                        with st.spinner("Generating audio..."):
-                            audio_file = generate_audio(content, speaker_id=1, max_chunk_length=max_chunk_length)
-                            st.session_state.audio_files[i] = audio_file
-                    
-                    # Display audio player
-                    audio_file = st.session_state.audio_files[i]
-                    audio_b64 = get_audio_base64(audio_file)
-                    st.markdown(get_audio_player_html(audio_b64), unsafe_allow_html=True)
+                // Get DOM elements
+                const deviceSelector = document.getElementById('device-selector-{component_id}');
+                const micButton = document.getElementById('micButton-{component_id}');
+                const refreshButton = document.getElementById('refreshDevices-{component_id}');
+                const timerElement = document.getElementById('timer-{component_id}');
+                const statusElement = document.getElementById('status-{component_id}');
+                const audioContainer = document.getElementById('audio-container-{component_id}');
+                const downloadLink = document.getElementById('download-link-{component_id}');
+                
+                // Load available audio input devices
+                async function loadAudioDevices() {{
+                    try {{
+                        deviceSelector.innerHTML = '<option value="">Loading devices...</option>';
+                        
+                        // Request device permissions to get access to device list
+                        await navigator.mediaDevices.getUserMedia({{ audio: true }});
+                        
+                        // Get all media devices
+                        const devices = await navigator.mediaDevices.enumerateDevices();
+                        
+                        // Filter for audio input devices only
+                        const audioInputDevices = devices.filter(device => device.kind === 'audioinput');
+                        
+                        // Clear the select options
+                        deviceSelector.innerHTML = '';
+                        
+                        // Add each audio input device to the select
+                        audioInputDevices.forEach(device => {{
+                            const option = document.createElement('option');
+                            option.value = device.deviceId;
+                            // Use a fallback name if label is not available
+                            if (device.label) {{
+                                option.text = device.label;
+                            }} else {{
+                                option.text = "Microphone " + device.deviceId.substring(0, 5) + "...";
+                            }}
+                            deviceSelector.appendChild(option);
+                        }});
+                        
+                        if (audioInputDevices.length === 0) {{
+                            deviceSelector.innerHTML = '<option value="">No microphones found</option>';
+                            statusElement.textContent = "Error: No microphones detected";
+                        }}
+                    }} catch (err) {{
+                        console.error("Error accessing media devices:", err);
+                        deviceSelector.innerHTML = '<option value="">Error loading devices</option>';
+                        statusElement.textContent = "Error: " + err.message;
+                    }}
+                }}
+                
+                // Update timer display
+                function updateTimer() {{
+                    const currentTime = new Date();
+                    const elapsedTime = new Date(currentTime - startTime);
+                    const minutes = elapsedTime.getUTCMinutes().toString().padStart(2, '0');
+                    const seconds = elapsedTime.getUTCSeconds().toString().padStart(2, '0');
+                    timerElement.textContent = `${{minutes}}:${{seconds}}`;
+                }}
+                
+                // Start recording
+                async function startRecording() {{
+                    try {{
+                        const selectedDeviceId = deviceSelector.value;
+                        
+                        if (!selectedDeviceId) {{
+                            statusElement.textContent = "Error: Please select a microphone";
+                            return;
+                        }}
+                        
+                        // Request microphone permission with specific device
+                        const constraints = {{
+                            audio: {{
+                                deviceId: {{ exact: selectedDeviceId }},
+                                echoCancellation: true,
+                                noiseSuppression: true,
+                                autoGainControl: true
+                            }}
+                        }};
+                        
+                        stream = await navigator.mediaDevices.getUserMedia(constraints);
+                        
+                        // Set up media recorder
+                        const options = {{ mimeType: 'audio/webm' }};
+                        
+                        try {{
+                            mediaRecorder = new MediaRecorder(stream, options);
+                        }} catch (e) {{
+                            // Fallback if the preferred format is not supported
+                            mediaRecorder = new MediaRecorder(stream);
+                        }}
+                        
+                        audioChunks = [];
+                        
+                        // Collect audio chunks when data is available
+                        mediaRecorder.ondataavailable = event => {{
+                            audioChunks.push(event.data);
+                        }};
+                        
+                        // Handle recording stopped
+                        mediaRecorder.onstop = () => {{
+                            // Create audio blob
+                            audioBlob = new Blob(audioChunks);
+                            audioUrl = URL.createObjectURL(audioBlob);
+                            
+                            // Create audio player
+                            const audioElement = document.createElement('audio');
+                            audioElement.src = audioUrl;
+                            audioElement.controls = true;
+                            audioElement.style.width = '100%';
+                            
+                            // Clear and add the audio element
+                            audioContainer.innerHTML = '';
+                            audioContainer.appendChild(audioElement);
+                            
+                            // Create download link
+                            downloadLink.href = audioUrl;
+                            downloadLink.download = "recording.webm";
+                            downloadLink.textContent = "Download Recording";
+                            downloadLink.style.display = "block";
+                            downloadLink.className = "mic-button";
+                            downloadLink.style.marginTop = "10px";
+                            downloadLink.style.textDecoration = "none";
+                            downloadLink.style.textAlign = "center";
+                            audioContainer.appendChild(downloadLink);
+                            
+                            statusElement.textContent = "Recording saved locally. Click Download to save it.";
+                        }};
+                        
+                        // Start recording
+                        mediaRecorder.start(1000); // Collect data every second
+                        isRecording = true;
+                        micButton.textContent = "Stop Recording";
+                        micButton.classList.add("recording");
+                        
+                        // Get the selected device name
+                        const selectedOption = deviceSelector.options[deviceSelector.selectedIndex];
+                        const deviceName = selectedOption ? selectedOption.text : "selected microphone";
+                        
+                        statusElement.textContent = "Recording... (using " + deviceName + ")";
+                        
+                        // Disable device selector while recording
+                        deviceSelector.disabled = true;
+                        refreshButton.disabled = true;
+                        
+                        // Start timer
+                        startTime = new Date();
+                        timerInterval = setInterval(updateTimer, 1000);
+                        
+                    }} catch (err) {{
+                        console.error("Error accessing microphone:", err);
+                        statusElement.textContent = "Error: " + err.message;
+                    }}
+                }}
+                
+                // Stop recording
+                function stopRecording() {{
+                    if (mediaRecorder && isRecording) {{
+                        mediaRecorder.stop();
+                        stream.getTracks().forEach(track => track.stop());
+                        clearInterval(timerInterval);
+                        isRecording = false;
+                        micButton.textContent = "Start Recording";
+                        micButton.classList.remove("recording");
+                        
+                        // Re-enable device selector
+                        deviceSelector.disabled = false;
+                        refreshButton.disabled = false;
+                    }}
+                }}
+                
+                // Toggle recording when button is clicked
+                micButton.addEventListener('click', () => {{
+                    if (isRecording) {{
+                        stopRecording();
+                    }} else {{
+                        startRecording();
+                    }}
+                }});
+                
+                // Refresh device list
+                refreshButton.addEventListener('click', () => {{
+                    statusElement.textContent = "Refreshing device list...";
+                    loadAudioDevices();
+                }});
+                
+                // Initialize device list
+                loadAudioDevices();
+            }})();
+        </script>
+    </div>
+    """
     
-    # Chat input
-    prompt = st.chat_input("Ask something...")
-    if prompt:
-        # Display user message
-        st.chat_message("user").markdown(prompt)
-        st.session_state.chat_history.append(("user", prompt))
-        
-        # Get response from LLM
-        response = call_llm(prompt, model, st.session_state.chat_history)
-        
-        # Display assistant message
-        message_idx = len(st.session_state.chat_history)
-        message_container = st.chat_message("assistant")
-        message_container.markdown(response)
-        
-        # Generate audio for the response
-        with st.spinner("Generating audio..."):
-            audio_file = generate_audio(response, speaker_id=1, max_chunk_length=max_chunk_length)
-            st.session_state.audio_files[message_idx] = audio_file
-        
-        # Display audio player
-        audio_b64 = get_audio_base64(audio_file)
-        message_container.markdown(get_audio_player_html(audio_b64), unsafe_allow_html=True)
-        
-        # Add to chat history
-        st.session_state.chat_history.append(("assistant", response))
-        
-        # Force rerun to update UI
-        st.rerun()
+    # Display the component
+    components.html(mic_html, height=400)
+    
+    st.info("Select your preferred microphone from the dropdown menu, then click 'Start Recording'.")
+    
+    return None
 
-
+# Example usage
 if __name__ == "__main__":
-    main()
+    st.title("Microphone Recorder with Device Selection")
+    
+    st.write("Select your microphone and record audio")
+    
+    # Display the microphone recorder component
+    mic_recorder(save_path="audio_recordings")
