@@ -1,9 +1,7 @@
 FROM ubuntu:22.04
-
 # Set environment variables to prevent interactive prompts during installation
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
-
 WORKDIR /app
 
 # Install system dependencies and add deadsnakes PPA for Python 3.12
@@ -15,13 +13,20 @@ RUN apt-get update && apt-get install -y \
     git \
     curl \
     wget \
+    # Audio-related packages
+    alsa-base \
+    alsa-utils \
+    libasound2-dev \
+    libportaudio2 \
+    libpulse-dev \
+    pulseaudio \
     && add-apt-repository ppa:deadsnakes/ppa \
     && apt-get update \
     && apt-get install -y \
     python3.12 \
     python3.12-venv \
     python3.12-dev \
-    python3-pyaudio  \
+    python3-pyaudio \
     && rm -rf /var/lib/apt/lists/*
 
 # Install pip for Python 3.12

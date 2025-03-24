@@ -14,10 +14,20 @@ from dataclasses import dataclass
 from typing import List, Optional
 from generator import load_csm_1b
 
-HF_TOKEN = os.environ['HUGGING_FACE_HUB_TOKEN']
+import os
+from dotenv import load_dotenv
+from huggingface_hub import login
 
-from huggingface_hub.commands.user import _login
-_login(token=HF_TOKEN)
+load_dotenv()  # Load environment variables from .env file
+HF_TOKEN = os.environ.get('HUGGING_FACE_HUB_TOKEN')
+# Make sure token exists before trying to use it
+if HF_TOKEN:
+    login(token=HF_TOKEN)
+else:
+    # Handle the case when no token is available
+    print("Warning: No Hugging Face token found")
+
+
 
 # Define the Segment class for TTS
 @dataclass
@@ -304,18 +314,29 @@ def main():
     # Get available audio devices
     devices = sd.query_devices()
     mic_list = [(i, device['name'], device['default_samplerate'])
-               for i, device in enumerate(devices) if device['max_input_channels'] > 0]
-    
-    # Let user select microphone
-    device_selection = st.sidebar.selectbox(
-        "Choose a microphone", 
-        options=range(len(mic_list)),
-        format_func=lambda x: f"{mic_list[x][1]} ({mic_list[x][2]} Hz)"
-    )
-    
-    # Set selected device and sample rate
-    device_index, device_name, device_samplingrate = mic_list[device_selection]
+            for i, device in enumerate(devices) if device['max_input_channels'] > 0]
+
+    # If no microphones are found, provide a helpful message
+    if not mic_list:
+        st.sidebar.warning("No microphones detected. Using default system microphone.")
+        # Use default device
+        device_index = None
+        device_name = "Default System Microphone"
+        device_samplingrate = 44100
+    else:
+        # Let user select microphone
+        device_selection = st.sidebar.selectbox(
+            "Choose a microphone", 
+            options=range(len(mic_list)),
+            format_func=lambda x: f"{mic_list[x][1]} ({mic_list[x][2]} Hz)"
+        )
+        
+        # Set selected device and sample rate
+        device_index, device_name, device_samplingrate = mic_list[device_selection]
+
+    # Set device configuration
     sd.default.device = device_index
+    st.sidebar.info(f"Using microphone: {device_name}")
     
     # Recording duration setting
     recording_duration = st.sidebar.slider("Recording Duration (seconds)", 2, 30, 5)
