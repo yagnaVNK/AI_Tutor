@@ -15,7 +15,7 @@ mpmath==1.3.0
 
 numpy==2.2.4
 ollama==0.4.7
-
+openai-whisper
 speechrecognition
 packaging==24.2
 pandas==2.2.3
@@ -26,10 +26,8 @@ PyYAML==6.0.2
 matplotlib
 safetensors==0.5.3
 setuptools==70.2.0
-librosa
 streamlit==1.43.2
 tokenizers==0.21.1
-pyaudio
 torch
 torchao
 torchaudio

@@ -5,14 +5,11 @@ import torchaudio
 import base64
 import os
 import re
-import sounddevice as sd
-import numpy as np
-import whisper
-import wave
-import tempfile
 from dataclasses import dataclass
 from typing import List, Optional
 from generator import load_csm_1b
+
+
 
 # Define the Segment class for TTS
 @dataclass
@@ -230,90 +227,18 @@ def get_audio_player_html(audio_b64):
     return audio_html
 
 
-# Function to record audio using sounddevice
-def record_audio(filename, duration=10, fs=44100):
-    """Records audio using sounddevice."""
-    try:
-        st.write("Recording... Please speak now.")
-        audio_data = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16')
-        
-        # Add a progress bar for recording
-        progress_bar = st.progress(0)
-        for i in range(100):
-            progress_bar.progress(i / 100)
-            time.sleep(duration / 100)
-        
-        sd.wait()  # Wait until recording is finished
-        
-        # Save the recorded audio to a file
-        with wave.open(filename, 'wb') as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(fs)
-            wf.writeframes(audio_data.tobytes())
-        
-        st.success("Recording complete!")
-        return True
-    except Exception as e:
-        st.error(f"Error during recording: {e}")
-        return False
-
-
-# Function to transcribe audio using Whisper
-def transcribe_audio(audio_path, whisper_model):
-    """Transcribes the audio using Whisper."""
-    try:
-        with st.spinner("Transcribing your speech..."):
-            result = whisper_model.transcribe(audio_path)
-            return result['text']
-    except Exception as e:
-        st.error(f"Error during transcription: {e}")
-        return None
-
-
 def main():
-    #st.set_page_config(page_title="Voice-Enabled Chatbot using Ollama", layout="centered")
-    st.title("🎤 Voice-Enabled Chatbot using Ollama")
+    #st.set_page_config(page_title="LLM Chatbot using Ollama", layout="centered")
+    st.title("🤖 Chatbot using Ollama")
     
-    # Initialize Whisper model in session state if not already there
-    if 'whisper_model' not in st.session_state:
-        with st.spinner("Loading Whisper model..."):
-            st.session_state.whisper_model = whisper.load_model("base")
-    
-    # Sidebar settings
     st.sidebar.title("Settings")
-    
-    # LLM settings
-    st.sidebar.subheader("LLM Settings")
     models = ["llama3.2:1b", "llama3:8b", "gemma"]
     model = st.sidebar.selectbox("Choose LLaMA Model", models)
     
-    # TTS settings
+    # TTS settings in sidebar
     st.sidebar.subheader("Text-to-Speech Settings")
     max_chunk_length = st.sidebar.slider("Max Chunk Length", 100, 500, 200, 
-                                      help="Maximum number of characters per audio chunk. Longer texts will be split into chunks of this size.")
-    
-    # Voice input settings
-    st.sidebar.subheader("Voice Input Settings")
-    
-    # Get available audio devices
-    devices = sd.query_devices()
-    mic_list = [(i, device['name'], device['default_samplerate'])
-               for i, device in enumerate(devices) if device['max_input_channels'] > 0]
-    
-    # Let user select microphone
-    device_selection = st.sidebar.selectbox(
-        "Choose a microphone", 
-        options=range(len(mic_list)),
-        format_func=lambda x: f"{mic_list[x][1]} ({mic_list[x][2]} Hz)"
-    )
-    
-    # Set selected device and sample rate
-    device_index, device_name, device_samplingrate = mic_list[device_selection]
-    sd.default.device = device_index
-    
-    # Recording duration setting
-    recording_duration = st.sidebar.slider("Recording Duration (seconds)", 2, 30, 5)
+                                     help="Maximum number of characters per audio chunk. Longer texts will be split into chunks of this size.")
     
     # Initialize session state
     if "chat_history" not in st.session_state:
@@ -357,73 +282,15 @@ def main():
                     audio_b64 = get_audio_base64(audio_file)
                     st.markdown(get_audio_player_html(audio_b64), unsafe_allow_html=True)
     
-    # Input methods container
-    input_container = st.container()
-    with input_container:
-        col1, col2 = st.columns([1, 1])
-        
-        with col1:
-            # Text input for typing
-            prompt = st.chat_input("Type your message...")
-            
-        with col2:
-            # Voice input option
-            voice_input_container = st.container()
-            with voice_input_container:
-                # Create a temporary file to store the recording
-                temp_audio_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-                
-                # Record button
-                if st.button("🎤 Record Voice Input", key="record_button"):
-                    # Record audio
-                    success = record_audio(temp_audio_file, duration=recording_duration, fs=int(device_samplingrate))
-                    
-                    if success:
-                        # Transcribe the recorded audio
-                        transcribed_text = transcribe_audio(temp_audio_file, st.session_state.whisper_model)
-                        
-                        if transcribed_text:
-                            # Update the transcript area with the transcribed text
-                            st.session_state.transcribed_text = transcribed_text
-                            st.success(f"Transcribed: {transcribed_text}")
-                            
-                            # Process the transcribed text as user input
-                            st.chat_message("user").markdown(transcribed_text)
-                            st.session_state.chat_history.append(("user", transcribed_text))
-                            
-                            # Get response from LLM
-                            with st.spinner("Getting response..."):
-                                response = call_llm(transcribed_text, model, st.session_state.chat_history)
-                            
-                            # Display assistant message
-                            message_idx = len(st.session_state.chat_history)
-                            message_container = st.chat_message("assistant")
-                            message_container.markdown(response)
-                            
-                            # Generate audio for the response
-                            with st.spinner("Generating audio..."):
-                                audio_file = generate_audio(response, speaker_id=1, max_chunk_length=max_chunk_length)
-                                st.session_state.audio_files[message_idx] = audio_file
-                            
-                            # Display audio player
-                            audio_b64 = get_audio_base64(audio_file)
-                            message_container.markdown(get_audio_player_html(audio_b64), unsafe_allow_html=True)
-                            
-                            # Add to chat history
-                            st.session_state.chat_history.append(("assistant", response))
-                            
-                            # Force rerun to update UI
-                            st.rerun()
-    
-    # Process text input if provided
+    # Chat input
+    prompt = st.chat_input("Ask something...")
     if prompt:
         # Display user message
         st.chat_message("user").markdown(prompt)
         st.session_state.chat_history.append(("user", prompt))
         
         # Get response from LLM
-        with st.spinner("Getting response..."):
-            response = call_llm(prompt, model, st.session_state.chat_history)
+        response = call_llm(prompt, model, st.session_state.chat_history)
         
         # Display assistant message
         message_idx = len(st.session_state.chat_history)
@@ -447,5 +314,4 @@ def main():
 
 
 if __name__ == "__main__":
-    import time  # Add import for time module used in progress bar
     main()
