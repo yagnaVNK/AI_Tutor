@@ -161,7 +161,7 @@ class Generator:
         return audio
 
 
-def load_csm_1b(device: str = "cuda") -> Generator:
+def load_csm_1b(device: str = "cuda" if torch.cuda.is_available() else "cpu") -> Generator:
     model = Model.from_pretrained("sesame/csm-1b")
     model.to(device=device, dtype=torch.bfloat16)
 
