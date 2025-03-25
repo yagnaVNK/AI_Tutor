@@ -12,12 +12,12 @@ import tempfile
 from dataclasses import dataclass
 from typing import List, Optional
 from generator import load_csm_1b
-
 import os
 from dotenv import load_dotenv
 from huggingface_hub import login
 
-load_dotenv()  # Load environment variables from .env file
+# Load environment variables from .env file
+load_dotenv()
 HF_TOKEN = os.environ.get('HUGGING_FACE_HUB_TOKEN')
 # Make sure token exists before trying to use it
 if HF_TOKEN:
@@ -276,158 +276,141 @@ def transcribe_audio(audio_path, whisper_model):
 
 
 def main():
-    #st.set_page_config(page_title="Voice-Enabled Chatbot using Ollama", layout="centered")
-    st.title("🎤 Voice-Enabled Chatbot using Ollama")
+    st.set_page_config(page_title="RAG LLM", layout="wide")
+    st.title("Open Source RAG multimodel LLM")
     
     # Initialize Whisper model in session state if not already there
     if 'whisper_model' not in st.session_state:
         with st.spinner("Loading Whisper model..."):
             st.session_state.whisper_model = whisper.load_model("base")
     
-    # Sidebar settings
-    st.sidebar.title("Settings")
-    
-    # LLM settings
-    st.sidebar.subheader("LLM Settings")
-    models = ["llama3.2:1b", "llama3:8b", "gemma"]
-    model = st.sidebar.selectbox("Choose LLaMA Model", models)
-    
-    # TTS settings
-    st.sidebar.subheader("Text-to-Speech Settings")
-    max_chunk_length = st.sidebar.slider("Max Chunk Length", 100, 500, 200, 
-                                      help="Maximum number of characters per audio chunk. Longer texts will be split into chunks of this size.")
-    
     # Initialize session state
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
     if "audio_files" not in st.session_state:
         st.session_state.audio_files = {}
     
-    # Display chat history
-    for i, chat in enumerate(st.session_state.chat_history):
-        role, content = chat
-        if role == "user":
-            st.chat_message("user").markdown(content)
-        else:
-            # For assistant messages, display message with audio button
-            col1, col2 = st.columns([0.9, 0.1])
-            with col1:
-                message_container = st.chat_message("assistant")
-                message_container.markdown(content)
+    # Sidebar settings
+    with st.sidebar:
+        st.header("Settings")
+        
+        # LLM settings
+        st.subheader("LLM Settings")
+        models = ["llama3.2:1b", "llama3:8b", "gemma"]
+        model = st.selectbox("Choose LLaMA Model", models)
+        
+        # TTS settings
+        st.subheader("Text-to-Speech Settings")
+        max_chunk_length = st.slider("Max Chunk Length", 100, 500, 200, 
+                                  help="Maximum number of characters per audio chunk. Longer texts will be split into chunks of this size.")
+        
+        # File uploader
+        st.header("Upload Files")
+        uploaded_file = st.file_uploader(
+            "Upload a file to analyze",
+            type=None,  # Accept all file types
+            accept_multiple_files=False,
+            help="Upload any file that you want to analyze or discuss"
+        )
+        if uploaded_file is not None:
+            file_details = {"Filename": uploaded_file.name, "Filetype": uploaded_file.type, "Size": f"{uploaded_file.size / 1024:.2f} KB"}
+            st.write("File Details:")
+            st.json(file_details)
+            # Add the file upload as a message
+            if st.button("Add file to chat"):
+                st.session_state.messages.append({"role": "user", "content": f"[Uploaded file: {uploaded_file.name}]"})
+                st.rerun()
+    
+    # Display chat messages
+    st.subheader("Chat")
+    chat_container = st.container()
+    with chat_container:
+        for i, message in enumerate(st.session_state.messages):
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
                 
-                # Check if audio exists for this message
-                if i in st.session_state.audio_files:
-                    audio_file = st.session_state.audio_files[i]
-                    audio_b64 = get_audio_base64(audio_file)
-                    message_container.markdown(get_audio_player_html(audio_b64), unsafe_allow_html=True)
-            
-            with col2:
-                # Copy button
-                if st.button("📋", key=f"copy_{i}"):
-                    st.session_state.clipboard_text = content
-                    st.success("Copied to clipboard!")
-                
-                # Speaker button - generate audio if not already generated
-                if st.button("🔊", key=f"speak_{i}"):
-                    if i not in st.session_state.audio_files:
-                        with st.spinner("Generating audio..."):
-                            audio_file = generate_audio(content, speaker_id=1, max_chunk_length=max_chunk_length)
-                            st.session_state.audio_files[i] = audio_file
-                    
-                    # Display audio player
+                # If it's an assistant message, add audio playback option
+                if message["role"] == "assistant" and i in st.session_state.audio_files:
                     audio_file = st.session_state.audio_files[i]
                     audio_b64 = get_audio_base64(audio_file)
                     st.markdown(get_audio_player_html(audio_b64), unsafe_allow_html=True)
     
-    # Input methods container
-    input_container = st.container()
-    with input_container:
-        col1, col2 = st.columns([1, 1])
-        
-        with col1:
-            # Text input for typing
-            prompt = st.chat_input("Type your message...")
-            
-        with col2:
-            # Voice input option
-            voice_input_container = st.container()
-            with voice_input_container:
-                # Create a temporary file to store the recording
-                temp_audio_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-                
-                # Record button with audio_recorder component
-                #st.write("Click the record button below to start recording")
-                uploaded_file = st.audio_input("Click the record button below to start recording")
-                
-                # Process the recording as soon as audio bytes are available
-                if uploaded_file is not None:
-                    # Save the uploaded audio file to disk
-                    with st.spinner("Processing your recording..."):
-                        if save_audio_to_file(uploaded_file, temp_audio_file):
-                            # Transcribe the recorded audio
-                            transcribed_text = transcribe_audio(temp_audio_file, st.session_state.whisper_model)
-                            
-                            if transcribed_text:
-                                # Update the transcript area with the transcribed text
-                                st.session_state.transcribed_text = transcribed_text
-                                st.success(f"Transcribed: {transcribed_text}")
-                                
-                                # Process the transcribed text as user input
-                                st.chat_message("user").markdown(transcribed_text)
-                                st.session_state.chat_history.append(("user", transcribed_text))
-                                
-                                # Get response from LLM
-                                with st.spinner("Getting response..."):
-                                    response = call_llm(transcribed_text, model, [(r, c) for r, c in st.session_state.chat_history[:-1]])
-                                
-                                # Display assistant message
-                                message_idx = len(st.session_state.chat_history)
-                                message_container = st.chat_message("assistant")
-                                message_container.markdown(response)
-                                
-                                # Generate audio for the response
-                                with st.spinner("Generating audio..."):
-                                    audio_file = generate_audio(response, speaker_id=1, max_chunk_length=max_chunk_length)
-                                    st.session_state.audio_files[message_idx] = audio_file
-                                
-                                # Display audio player
-                                audio_b64 = get_audio_base64(audio_file)
-                                message_container.markdown(get_audio_player_html(audio_b64), unsafe_allow_html=True)
-                                
-                                # Add to chat history
-                                st.session_state.chat_history.append(("assistant", response))
+    # Input section - putting audio and text input close together
+    st.subheader("Input")
+    col1, col2 = st.columns([1, 2])
     
-    # Process text input if provided
-    if prompt:
-        # Display user message
-        st.chat_message("user").markdown(prompt)
-        st.session_state.chat_history.append(("user", prompt))
+    with col1:
+        # Audio input
+        uploaded_audio = st.audio_input("Record audio")
         
-        # Get response from LLM
-        with st.spinner("Getting response..."):
-            response = call_llm(prompt, model, [(r, c) for r, c in st.session_state.chat_history[:-1]])
+        if uploaded_audio is not None:
+            # Create a temporary file to store the recording
+            temp_audio_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+            
+            # Save the uploaded audio file to disk
+            with st.spinner("Processing your recording..."):
+                if save_audio_to_file(uploaded_audio, temp_audio_file):
+                    # Transcribe the recorded audio
+                    transcribed_text = transcribe_audio(temp_audio_file, st.session_state.whisper_model)
+                    
+                    if transcribed_text:
+                        st.success(f"Transcribed: {transcribed_text}")
+                        
+                        # Add transcribed text as user message
+                        if st.button("Add transcription to chat"):
+                            st.session_state.messages.append({"role": "user", "content": transcribed_text})
+                            
+                            # Get response from LLM
+                            with st.spinner("Getting response..."):
+                                chat_history = [(msg["role"], msg["content"]) for msg in st.session_state.messages[:-1]]
+                                response = call_llm(transcribed_text, model, chat_history)
+                            
+                            # Add assistant response to chat
+                            message_idx = len(st.session_state.messages)
+                            st.session_state.messages.append({"role": "assistant", "content": response})
+                            
+                            # Generate audio for the response
+                            with st.spinner("Generating audio..."):
+                                audio_file = generate_audio(response, speaker_id=1, max_chunk_length=max_chunk_length)
+                                st.session_state.audio_files[message_idx] = audio_file
+                            
+                            st.rerun()
+    
+    with col2:
+        # Text input for chat
+        prompt = st.chat_input("Type your message here...")
         
-        # Display assistant message
-        message_idx = len(st.session_state.chat_history)
-        message_container = st.chat_message("assistant")
-        message_container.markdown(response)
-        
-        # Generate audio for the response
-        with st.spinner("Generating audio..."):
-            audio_file = generate_audio(response, speaker_id=1, max_chunk_length=max_chunk_length)
-            st.session_state.audio_files[message_idx] = audio_file
-        
-        # Display audio player
-        audio_b64 = get_audio_base64(audio_file)
-        message_container.markdown(get_audio_player_html(audio_b64), unsafe_allow_html=True)
-        
-        # Add to chat history
-        st.session_state.chat_history.append(("assistant", response))
-        
-        # Force rerun to update UI
+        if prompt:
+            # Add user message to chat history
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            
+            # Get response from LLM
+            with st.spinner("Getting response..."):
+                chat_history = [(msg["role"], msg["content"]) for msg in st.session_state.messages[:-1]]
+                response = call_llm(prompt, model, chat_history)
+            
+            # Add assistant response to chat
+            message_idx = len(st.session_state.messages)
+            st.session_state.messages.append({"role": "assistant", "content": response})
+            
+            # Generate audio for the response
+            with st.spinner("Generating audio..."):
+                audio_file = generate_audio(response, speaker_id=1, max_chunk_length=max_chunk_length)
+                st.session_state.audio_files[message_idx] = audio_file
+            
+            # Rerun to update the UI
+            st.rerun()
+    
+    # Optional: Clear chat button
+    if st.button("Clear Chat"):
+        st.session_state.messages = []
+        st.session_state.audio_files = {}
+        # Clean up temp audio files
+        if os.path.exists("temp_audio"):
+            for file in os.listdir("temp_audio"):
+                os.remove(os.path.join("temp_audio", file))
         st.rerun()
 
 
 if __name__ == "__main__":
-    import time  # Add import for time module used in progress bar
     main()
