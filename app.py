@@ -51,7 +51,7 @@ def prepare_prompt(text: str, speaker: int, audio_path: str, sample_rate: int) -
 
 
 # Function to call LLM
-def call_llm(prompt, model="llama3:8b", chat_history=[]):
+def call_llm(prompt, model="gemma3:1b", chat_history=[]):
     try:
         system_prompt = "You are a funny helpful ai assistant who gives the answers in a short and conversational way. DO not add any punctuation in the output text"
         messages = [{"role": "system", "content": system_prompt}]
@@ -59,7 +59,7 @@ def call_llm(prompt, model="llama3:8b", chat_history=[]):
         messages.append({"role": "user", "content": prompt})
         response = ollama.chat(
             model=model,
-            messages=messages
+            messages=messages,
         )
         return response["message"]["content"]
     except Exception as e:
@@ -296,7 +296,7 @@ def main():
         
         # LLM settings
         st.subheader("LLM Settings")
-        models = ["llama3.2:1b", "llama3:8b", "gemma"]
+        models = ["gemma3:1b", "llama3.2:1b"]
         model = st.selectbox("Choose LLaMA Model", models)
         
         # TTS settings
