@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RAG LLM Chatbot</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; max-width: 800px; }
+    #chatBox { border: 1px solid #ccc; padding: 1rem; height: 400px; overflow-y: auto; margin-bottom: 1rem; background: #f9f9f9; }
+    .message { margin: 0.5rem 0; }
+    .user { text-align: right; color: #004085; }
+    .bot { text-align: left; color: #155724; }
+    .message audio { display: block; margin-top: 0.5rem; }
+    #inputArea, #transcriptionArea { margin-bottom: 1rem; }
+    #promptInput { width: 70%; padding: 0.5rem; }
+    #sendBtn, #transcribeBtn { padding: 0.5rem 1rem; }
+  </style>
+</head>
+<body>
+  <h1>RAG LLM Chatbot</h1>
+
+  <div>
+    <label for="modelSelect">Model:</label>
+    <select id="modelSelect"></select>
+  </div>
+
+  <div id="chatBox"></div>
+
+  <div id="inputArea">
+    <input type="text" id="promptInput" placeholder="Type your message..." />
+    <button id="sendBtn">Send</button>
+  </div>
+
+  <div id="transcriptionArea">
+    <h2>Transcription</h2>
+    <input type="file" id="audioFileInput" accept="audio/*" />
+    <button id="transcribeBtn">Transcribe</button>
+    <p id="transcript"></p>
+  </div>
+
+  <script>
+    const API_BASE = 'http://localhost:8956';
+    let chatHistory = [];
+
+    async function loadModels() {
+      try {
+        const res = await fetch(`${API_BASE}/models`);
+        const models = await res.json();
+        const sel = document.getElementById('modelSelect');
+        sel.innerHTML = '';
+        models.forEach(m => {
+          const opt = document.createElement('option'); opt.value = m; opt.text = m;
+          sel.appendChild(opt);
+        });
+      } catch (err) {
+        console.error('Error loading models:', err);
+        alert('Failed to load models. Check console.');
+      }
+    }
+
+    function addMessage(role, text, audioBase64) {
+      const box = document.getElementById('chatBox');
+      const div = document.createElement('div');
+      div.className = `message ${role}`;
+      const content = document.createElement('div');
+      content.innerText = text;
+      div.appendChild(content);
+      if (audioBase64) {
+        const audio = document.createElement('audio');
+        audio.controls = true;
+        audio.src = `data:audio/wav;base64,${audioBase64}`;
+        div.appendChild(audio);
+      }
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    document.getElementById('sendBtn').addEventListener('click', async () => {
+      const promptInput = document.getElementById('promptInput');
+      const prompt = promptInput.value.trim();
+      const model = document.getElementById('modelSelect').value;
+      if (!prompt) return;
+
+      addMessage('user', prompt);
+      chatHistory.push({ role: 'user', content: prompt });
+      promptInput.value = '';
+
+      try {
+        const chatRes = await fetch(`${API_BASE}/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt, model, chat_history: chatHistory })
+        });
+        const chatJson = await chatRes.json();
+        const botText = chatJson.response || chatJson.error;
+        addMessage('bot', botText);
+        chatHistory.push({ role: 'assistant', content: botText });
+
+        // Generate TTS audio
+        const audioRes = await fetch(`${API_BASE}/generate_audio`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: botText, speaker_id: 1 })
+        });
+        const audioJson = await audioRes.json();
+        if (audioJson.audio) {
+          addMessage('bot', '', audioJson.audio);
+        }
+      } catch (err) {
+        console.error('Chat error:', err);
+        addMessage('bot', 'Error contacting server.');
+      }
+    });
+
+    document.getElementById('transcribeBtn').addEventListener('click', async () => {
+      const input = document.getElementById('audioFileInput');
+      if (!input.files.length) return alert('Please select an audio file.');
+      const fd = new FormData(); fd.append('file', input.files[0]);
+
+      try {
+        const res = await fetch(`${API_BASE}/transcribe`, { method: 'POST', body: fd });
+        const json = await res.json();
+        if (json.text) {
+          document.getElementById('transcript').innerText = json.text;
+          document.getElementById('promptInput').value = json.text;
+        } else {
+          document.getElementById('transcript').innerText = 'Error: ' + json.error;
+        }
+      } catch (err) {
+        console.error('Transcription error:', err);
+        alert('Transcription failed.');
+      }
+    });
+
+    window.addEventListener('DOMContentLoaded', loadModels);
+  </script>
+</body>
+</html>

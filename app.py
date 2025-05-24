@@ -18,7 +18,7 @@ from huggingface_hub import login
 
 # Load environment variables from .env file
 load_dotenv()
-HF_TOKEN = os.environ.get('HUGGING_FACE_HUB_TOKEN')
+HF_TOKEN = os.environ.get('HF_TOKEN')
 # Make sure token exists before trying to use it
 if HF_TOKEN:
     login(token=HF_TOKEN)

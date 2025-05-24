@@ -5,3 +5,4 @@ __pycache__/models.cpython-310.pyc
 demo-rag-chroma/chroma.sqlite3
 /AitutorEnv
 *.pyc
+sesameVenv

@@ -1,8 +1,8 @@
 openai-whisper
-torch
-torchaudio
+torch==2.6.0
+torchaudio==2.6.0
 streamlit
-torchvision
+torchvision==0.21.0
 huggingface-hub
 ollama
 langchain-community
@@ -10,6 +10,9 @@ langchain
 sounddevice
 torchtune
 torchao
-moshi
+-U moshi
 tokenizers
-transformers
+transformers==4.46.1
+flask 
+flask-cors 
+python-dotenv
