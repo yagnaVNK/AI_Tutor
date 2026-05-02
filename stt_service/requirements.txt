@@ -1,0 +1,8 @@
+fastapi==0.136.1
+uvicorn[standard]==0.32.1
+python-dotenv==1.0.1
+pydantic==2.10.3
+python-multipart==0.0.20
+faster-whisper==1.2.1
+numpy==2.2.0
+soundfile==0.12.1

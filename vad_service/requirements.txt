@@ -1,0 +1,6 @@
+fastapi==0.136.1
+uvicorn[standard]==0.32.1
+python-multipart==0.0.20
+numpy==2.2.0
+onnxruntime==1.25.1
+soundfile==0.12.1

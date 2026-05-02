@@ -1,0 +1,37 @@
+# Combined requirements for running all Python services from one shared venv.
+# Versions chosen to be Python 3.14 compatible.
+
+# ---- Web frameworks ----
+Django==5.2.4
+djangorestframework==3.16.0
+django-cors-headers==4.6.0
+fastapi==0.136.1
+uvicorn[standard]==0.32.1
+gunicorn==23.0.0
+websockets==14.1
+python-multipart==0.0.20
+whitenoise==6.8.2
+
+# ---- HTTP / utilities ----
+httpx==0.28.1
+python-dotenv==1.0.1
+pydantic>=2.11,<3
+
+# ---- Auth ----
+# Firebase ID-token verification only needs google-auth (public JWKs).
+# firebase-admin is kept available for any future server-side use cases
+# (custom tokens, FCM, Firestore admin, etc.).
+google-auth>=2.30,<3
+firebase-admin==7.1.0
+
+# ---- File parsing ----
+pypdf==5.1.0
+python-docx==1.1.2
+
+# ---- Audio + ML ----
+numpy>=2.4,<3
+soundfile==0.12.1
+faster-whisper==1.2.1
+onnxruntime==1.25.1
+edge-tts>=7.0,<8
+av>=12.0,<18

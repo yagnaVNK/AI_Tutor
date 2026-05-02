@@ -1,17 +1,138 @@
-version: '3'
+version: "3.9"
+
+# ===========================================================================
+# AI Tutor - Local Development Stack
+# ===========================================================================
 
 services:
-  streamlit-app:
-    build: .
-    ports:
-      - "8501:8501"
-    volumes:
-      - ./:/app
-      - ollama-models:/root/.ollama
+  # ----- PostgreSQL with pgvector -----
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ai_tutor_postgres
     environment:
-      - STREAMLIT_SERVER_PORT=8501
-      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
-    restart: unless-stopped
+      POSTGRES_DB: ${POSTGRES_DB:-ai_tutor}
+      POSTGRES_USER: ${POSTGRES_USER:-ai_tutor}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ai_tutor_dev_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ai_tutor}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ----- Redis (optional) -----
+  redis:
+    image: redis:7-alpine
+    container_name: ai_tutor_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # ----- Django REST API -----
+  backend_api:
+    build:
+      context: ./backend_api
+      dockerfile: Dockerfile
+    container_name: ai_tutor_backend_api
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      REDIS_URL: redis://redis:6379/0
+      LLM_SERVICE_URL: http://llm_service:8001
+      TTS_SERVICE_URL: http://tts_service:8002
+      STT_SERVICE_URL: http://stt_service:8003
+      FIREBASE_PROJECT_ID: ${VITE_FIREBASE_PROJECT_ID:-ai-chat-c5bdf}
+      FIREBASE_CREDENTIALS_PATH: /app/firebase-service-account.json
+      DJANGO_ALLOWED_HOSTS: "*"
+    volumes:
+      - backend_media:/app/media
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ----- LLM Service (proxies to LMStudio on the host) -----
+  llm_service:
+    build:
+      context: ./llm_service
+      dockerfile: Dockerfile
+    container_name: ai_tutor_llm_service
+    env_file:
+      - .env
+    environment:
+      LLM_UPSTREAM_URL: http://host.docker.internal:1234
+      LLM_UPSTREAM_API_KEY: lm-studio
+      LLM_MODEL: ${LLM_MODEL:-meta-llama-3-8b-instruct}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8001:8001"
+
+  # ----- TTS Service -----
+  tts_service:
+    build:
+      context: ./tts_service
+      dockerfile: Dockerfile
+    container_name: ai_tutor_tts_service
+    env_file:
+      - .env
+    ports:
+      - "8002:8002"
+
+  # ----- STT Service (Whisper) -----
+  stt_service:
+    build:
+      context: ./stt_service
+      dockerfile: Dockerfile
+    container_name: ai_tutor_stt_service
+    env_file:
+      - .env
+    ports:
+      - "8003:8003"
+
+  # ----- VAD Service (Silero) -----
+  vad_service:
+    build:
+      context: ./vad_service
+      dockerfile: Dockerfile
+    container_name: ai_tutor_vad_service
+    env_file:
+      - .env
+    ports:
+      - "8005:8005"
+
+  # ----- Voice Gateway -----
+  voice_gateway:
+    build:
+      context: ./voice_gateway
+      dockerfile: Dockerfile
+    container_name: ai_tutor_voice_gateway
+    env_file:
+      - .env
+    environment:
+      BACKEND_API_URL: http://backend_api:8000
+      LLM_SERVICE_URL: http://llm_service:8001
+      TTS_SERVICE_URL: http://tts_service:8002
+      STT_SERVICE_URL: http://stt_service:8003
+      VAD_SERVICE_URL: http://vad_service:8005
+      FIREBASE_PROJECT_ID: ${VITE_FIREBASE_PROJECT_ID:-ai-chat-c5bdf}
+      FIREBASE_CREDENTIALS_PATH: /app/firebase-service-account.json
+    ports:
+      - "8004:8004"
+    depends_on:
+      - backend_api
+      - llm_service
+      - tts_service
+      - stt_service
+      - vad_service
 
 volumes:
-  ollama-models:
+  postgres_data:
+  redis_data:
+  backend_media:
